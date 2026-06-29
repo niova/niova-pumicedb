@@ -125,6 +125,63 @@ func (handler *ServiceDiscoveryHandler) Request(payload []byte, suburl string, w
 	return response, err
 }
 
+// RESTRequest issues a REST request to a discovered PROXY using the given HTTP
+// method, sub-URL (path + query string), request body and headers. It returns
+// the response body and HTTP status code, reusing the same server selection and
+// transport-level retry/failover as Request. A non-2xx HTTP status is treated
+// as a valid REST response (not a transport failure) and is returned without
+// retry; only transport errors trigger failover to another proxy.
+func (handler *ServiceDiscoveryHandler) RESTRequest(method, suburl string, body []byte, headers map[string]string) ([]byte, int, error) {
+	var toSend client.Member
+	var response []byte
+	var status int
+	var err error
+
+	for i := 0; i < handler.HTTPRetry; i++ {
+		//Get node to send request to
+		toSend, err = handler.pickServer(toSend.Name)
+		if err != nil {
+			log.Error("Error while choosing node : ", err)
+			break
+		}
+
+		//Get node's http address
+		addr, port := getAddr(&toSend)
+		response, status, err = httpClient.REST_Request(method, addr+":"+port+suburl, body, headers)
+		ok := err == nil
+
+		//Update request stat
+		if handler.IsStatRequired {
+			handler.statUpdateLock.Lock()
+			if _, present := handler.RequestDistribution[toSend.Name]; !present {
+				handler.RequestDistribution[toSend.Name] = &ServerRequestStat{}
+			}
+			handler.RequestDistribution[toSend.Name].updateStat(ok)
+			handler.statUpdateLock.Unlock()
+		}
+
+		//Break from retry loop on transport success (any HTTP status)
+		if ok {
+			break
+		}
+
+		log.Error("Error in REST request : ", err)
+		log.Trace("Retrying REST request with a different proxy")
+		time.Sleep(1 * time.Second)
+	}
+
+	if handler.IsStatRequired {
+		handler.RequestSentCount += int64(1)
+		if err == nil {
+			handler.RequestSuccessCount += int64(1)
+		} else {
+			handler.RequestFailedCount += int64(1)
+		}
+	}
+
+	return response, status, err
+}
+
 func isValidNodeData(member client.Member) bool {
 	if (member.Status != "alive") || (member.Tags["Hport"] == "") || (member.Tags["Type"] != "PROXY") {
 		return false
