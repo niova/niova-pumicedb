@@ -9,6 +9,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,11 @@ type HTTPServerHandler struct {
 	// built-in endpoints, letting apps expose e.g. a REST API alongside the
 	// legacy /func, /app and /lease paths. nil disables this.
 	Routes map[string]http.HandlerFunc
+	// RESTHandler, when set, handles every request whose path begins with
+	// "/api/", taking precedence over Routes and the built-in paths below. It
+	// lets apps register a method+pattern router (e.g. a Go ServeMux with
+	// "DELETE /api/vdev/{id}") for a REST API. nil disables this.
+	RESTHandler http.Handler
 	//Non-exported
 	HTTPServer        http.Server
 	rncui             string
@@ -341,6 +347,12 @@ func (handler *HTTPServerHandler) funcHandler(writer http.ResponseWriter, reader
 
 // HTTP server handler called when request is received
 func (handler *HTTPServerHandler) ServeHTTP(writer http.ResponseWriter, reader *http.Request) {
+	// App-registered REST router handles everything under /api/, taking
+	// precedence over the exact-path Routes map and built-in paths below.
+	if handler.RESTHandler != nil && strings.HasPrefix(reader.URL.Path, "/api/") {
+		handler.RESTHandler.ServeHTTP(writer, reader)
+		return
+	}
 	// App-registered routes (e.g. REST API endpoints) take precedence over the
 	// built-in paths below.
 	if handler.Routes != nil {
