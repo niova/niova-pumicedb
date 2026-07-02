@@ -43,9 +43,11 @@ type HTTPServerHandler struct {
 	// legacy /func, /app and /lease paths. nil disables this.
 	Routes map[string]http.HandlerFunc
 	// RESTHandler, when set, handles every request whose path begins with
-	// "/api/", taking precedence over Routes and the built-in paths below. It
-	// lets apps register a method+pattern router (e.g. a Go ServeMux with
-	// "DELETE /api/vdev/{id}") for a REST API. nil disables this.
+	// "/api/" or "/users/", taking precedence over Routes and the built-in paths
+	// below. It lets apps register a method+pattern router (e.g. a Go ServeMux
+	// with "DELETE /api/vdev/{id}") for a REST API. The "/users/" prefix is
+	// delegated too so apps can place auth routes (e.g. "POST /users/login")
+	// outside the /api/ namespace. nil disables this.
 	RESTHandler http.Handler
 	//Non-exported
 	HTTPServer        http.Server
@@ -347,9 +349,10 @@ func (handler *HTTPServerHandler) funcHandler(writer http.ResponseWriter, reader
 
 // HTTP server handler called when request is received
 func (handler *HTTPServerHandler) ServeHTTP(writer http.ResponseWriter, reader *http.Request) {
-	// App-registered REST router handles everything under /api/, taking
-	// precedence over the exact-path Routes map and built-in paths below.
-	if handler.RESTHandler != nil && strings.HasPrefix(reader.URL.Path, "/api/") {
+	// App-registered REST router handles everything under /api/ and /users/,
+	// taking precedence over the exact-path Routes map and built-in paths below.
+	if handler.RESTHandler != nil &&
+		(strings.HasPrefix(reader.URL.Path, "/api/") || strings.HasPrefix(reader.URL.Path, "/users/")) {
 		handler.RESTHandler.ServeHTTP(writer, reader)
 		return
 	}
