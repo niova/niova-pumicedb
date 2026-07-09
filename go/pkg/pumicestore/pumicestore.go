@@ -1,7 +1,7 @@
 package pumicestore
 
 import (
-	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -66,6 +66,10 @@ func (s *PumiceStore) Read(key, selector string) ([]byte, error) {
 		C.rocksdb_free(unsafe.Pointer(cv))
 	}
 
+	if len(result) == 0 {
+		return nil, fmt.Errorf("failed to lookup for %s key", key)
+	}
+
 	return result, nil
 }
 
@@ -124,7 +128,7 @@ func (s *PumiceStore) RangeRead(args storageiface.RangeReadArgs) (*storageiface.
 	FreeCMem(cf)
 
 	if len(res.ResultMap) == 0 {
-		return nil, errors.New("Failed to lookup for key")
+		return nil, fmt.Errorf("failed to lookup for %s key", args.Key)
 	}
 
 	return res, nil
