@@ -238,6 +238,8 @@ func (handler *nisdMonitor) startClientAPI() {
 	handler.storageClient = serviceDiscovery.ServiceDiscoveryHandler{
 		HTTPRetry: 10,
 		SerfRetry: 5,
+		// requestPMDB sends a KVRequest, which is NKV_proxy's protocol.
+		ServiceTypeTag: serviceDiscovery.ServiceTypeNiovaKV,
 	}
 	stop := make(chan int)
 	go func() {

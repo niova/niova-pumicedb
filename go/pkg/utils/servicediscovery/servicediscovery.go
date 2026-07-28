@@ -17,24 +17,18 @@ import (
 	client "github.com/hashicorp/serf/client"
 )
 
-// Gossip "Type" tag values identifying a niova control-plane app server.
+// Gossip "Type" tag values, one per service a client can discover. Each service
+// publishes exactly one of these, and a client only ever talks to one kind, so
+// the values must stay distinct — sharing a tag makes two services
+// interchangeable to the picker.
 const (
-	// ServiceTypeNiovaMdsvc is the current tag published by the control-plane
-	// app servers (CTLPlane_proxy and mdsvc-tidb).
+	// ServiceTypeNiovaMdsvc is published by the control-plane app servers
+	// (CTLPlane_proxy and mdsvc-tidb).
 	ServiceTypeNiovaMdsvc = "niova-mdsvc"
 
-	// ServiceTypeLegacyProxy is the value used before the rename to
-	// ServiceTypeNiovaMdsvc. It is still accepted so that a partially migrated
-	// fleet keeps discovering members, and so niovaKV's NKV_proxy — which still
-	// publishes it — remains reachable. Drop it once every publisher has moved.
-	ServiceTypeLegacyProxy = "PROXY"
+	// ServiceTypeNiovaKV is published by niovaKV's NKV_proxy.
+	ServiceTypeNiovaKV = "niova-kv"
 )
-
-// isAppServerType reports whether a gossiped "Type" tag identifies an app server
-// this client can send requests to, accepting both the current and legacy values.
-func isAppServerType(tag string) bool {
-	return tag == ServiceTypeNiovaMdsvc || tag == ServiceTypeLegacyProxy
-}
 
 type ServiceDiscoveryHandler struct {
 	//Exported
@@ -43,6 +37,12 @@ type ServiceDiscoveryHandler struct {
 	ServerChooseAlgorithm int
 	UseSpecificServerName string
 	RaftUUID              string
+
+	// ServiceTypeTag is the gossip "Type" tag this client accepts; members
+	// advertising anything else are skipped. Empty means ServiceTypeNiovaMdsvc,
+	// so control-plane clients need not set it. niovaKV clients must set
+	// ServiceTypeNiovaKV.
+	ServiceTypeTag string
 
 	//Stat
 	RequestDistribution map[string]*ServerRequestStat
@@ -144,7 +144,7 @@ func (handler *ServiceDiscoveryHandler) Request(payload []byte, suburl string, w
 	return response, err
 }
 
-// RESTRequest issues a REST request to a discovered PROXY using the given HTTP
+// RESTRequest issues a REST request to a discovered app server using the given HTTP
 // method, sub-URL (path + query string), request body and headers. It returns
 // the response body and HTTP status code, reusing the same server selection and
 // transport-level retry/failover as Request. A non-2xx HTTP status is treated
@@ -201,8 +201,18 @@ func (handler *ServiceDiscoveryHandler) RESTRequest(method, suburl string, body 
 	return response, status, err
 }
 
-func isValidNodeData(member client.Member) bool {
-	if (member.Status != "alive") || (member.Tags["Hport"] == "") || !isAppServerType(member.Tags["Type"]) {
+// expectedServiceType is the gossip "Type" tag this client accepts, defaulting
+// to the control plane so existing callers need no change.
+func (handler *ServiceDiscoveryHandler) expectedServiceType() string {
+	if handler.ServiceTypeTag == "" {
+		return ServiceTypeNiovaMdsvc
+	}
+	return handler.ServiceTypeTag
+}
+
+func (handler *ServiceDiscoveryHandler) isValidNodeData(member client.Member) bool {
+	if (member.Status != "alive") || (member.Tags["Hport"] == "") ||
+		(member.Tags["Type"] != handler.expectedServiceType()) {
 		return false
 	}
 	return true
@@ -226,7 +236,7 @@ func (handler *ServiceDiscoveryHandler) pickServer(removeName string) (client.Me
 			}
 
 			//Check if node is alive, check if gossip is available and http server of that node is not reported down!
-			if isValidNodeData(handler.servers[randomIndex]) {
+			if handler.isValidNodeData(handler.servers[randomIndex]) {
 				if (removeName == "") || (removeName != handler.servers[randomIndex].Name) {
 					break
 				}
@@ -243,7 +253,7 @@ func (handler *ServiceDiscoveryHandler) pickServer(removeName string) (client.Me
 			}
 			handler.roundRobinPtr %= len(handler.servers)
 			serverChoosen = &handler.servers[handler.roundRobinPtr]
-			if isValidNodeData(handler.servers[handler.roundRobinPtr]) {
+			if handler.isValidNodeData(handler.servers[handler.roundRobinPtr]) {
 				handler.roundRobinPtr += 1
 				break
 			}
