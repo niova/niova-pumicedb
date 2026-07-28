@@ -17,6 +17,25 @@ import (
 	client "github.com/hashicorp/serf/client"
 )
 
+// Gossip "Type" tag values identifying a niova control-plane app server.
+const (
+	// ServiceTypeNiovaMdsvc is the current tag published by the control-plane
+	// app servers (CTLPlane_proxy and mdsvc-tidb).
+	ServiceTypeNiovaMdsvc = "niova-mdsvc"
+
+	// ServiceTypeLegacyProxy is the value used before the rename to
+	// ServiceTypeNiovaMdsvc. It is still accepted so that a partially migrated
+	// fleet keeps discovering members, and so niovaKV's NKV_proxy — which still
+	// publishes it — remains reachable. Drop it once every publisher has moved.
+	ServiceTypeLegacyProxy = "PROXY"
+)
+
+// isAppServerType reports whether a gossiped "Type" tag identifies an app server
+// this client can send requests to, accepting both the current and legacy values.
+func isAppServerType(tag string) bool {
+	return tag == ServiceTypeNiovaMdsvc || tag == ServiceTypeLegacyProxy
+}
+
 type ServiceDiscoveryHandler struct {
 	//Exported
 	HTTPRetry             int //No of seconds for a request time out and membership table refresh
@@ -183,7 +202,7 @@ func (handler *ServiceDiscoveryHandler) RESTRequest(method, suburl string, body 
 }
 
 func isValidNodeData(member client.Member) bool {
-	if (member.Status != "alive") || (member.Tags["Hport"] == "") || (member.Tags["Type"] != "PROXY") {
+	if (member.Status != "alive") || (member.Tags["Hport"] == "") || !isAppServerType(member.Tags["Type"]) {
 		return false
 	}
 	return true
