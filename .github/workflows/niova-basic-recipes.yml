@@ -29,7 +29,7 @@ jobs:
     - name: Setup SSH Session
       uses: mxschmitt/action-tmate@v3
       with:
-        limit-access-to-actor: true
+        limit-access-to-actor: false
       if: failure()
     
     - uses: ./.github/actions/teardown-success
