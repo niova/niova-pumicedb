@@ -12,7 +12,7 @@ ENABLE_SYNC=${9}
 
 export ANSIBLE_LOOKUP_PLUGINS=$HOLON_LIBS
 export PYTHONPATH=$HOLON_LIBS
-export NIOVA_BIN_PATH="$BIN_PATH/libexec/niova"
+export NIOVA_BIN_PATH=$BIN_PATH
 export CGO_LDFLAGS="-L$BIN_PATH/lib"
 export CGO_CFLAGS="-I$BIN_PATH/include/niova"
 export LD_LIBRARY_PATH="$BIN_PATH/lib"
