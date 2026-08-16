@@ -26,6 +26,12 @@ jobs:
                              'pumicedb'
                              '/home/runner/work/go/go/bin'
 
+    - name: Setup SSH Session
+      uses: mxschmitt/action-tmate@v3
+      with:
+        limit-access-to-actor: true
+      if: failure()
+    
     - uses: ./.github/actions/teardown-success
       if: ${{ success() }}
 
