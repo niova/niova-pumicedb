@@ -17,10 +17,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var ttlDefault = 15
+var ttlDefault = 40
 var gcTimeout = 35
 
 const MAX_SINGLE_GC_REQ = 100
+const MAX_BUF_SIZE = 4 * 1024 * 1024 // 4MB
 
 var LEASE_COLUMN_FAMILY = "NIOVA_LEASE_CF"
 
@@ -118,7 +119,9 @@ func (lso *LeaseServerObject) listOperation(element *leaseLib.LeaseInfo, opcode 
 
 	switch opcode {
 	case PUSH:
-		lso.listObj.PushBack(element)
+		elem := lso.listObj.PushBack(element)
+    	element.ListElement = elem
+		// lso.listObj.PushBack(element)
 	case MOVE_TO_BACK:
 		lso.listObj.MoveToBack(element.ListElement)
 	case REMOVE:
@@ -389,8 +392,8 @@ func (handler *LeaseServerReqHandler) initLease() (*leaseLib.LeaseInfo, error) {
 	lop.LeaseMetaInfo.TTL = ttlDefault
 
 	//Insert into list
-	lop.ListElement = &list.Element{}
-	lop.ListElement.Value = lop
+	// lop.ListElement = &list.Element{}
+	// lop.ListElement.Value = lop
 
 	//Any apply requires lease to be pushed back in the list
 	//Do list sanity check only if its a leader
@@ -542,34 +545,88 @@ func (lso *LeaseServerObject) leaderInit() {
 }
 
 func (lso *LeaseServerObject) peerBootup(cbArgs *PumiceDBServer.PmdbCbArgs) {
-	rrargs := storageiface.RangeReadArgs{
-		Selector: lso.LeaseColmFam,
-	}
-	rrres, err := cbArgs.Store.RangeRead(rrargs)
-	if err != nil {
-		log.Error("Failed to read from PumicDB: ", err)
-		return
-	}
+	var startKey string // start from beginning
 
-	if rrres.ResultMap != nil {
-		//Result of the read
-		for key, value := range rrres.ResultMap {
-			//Decode the request structure sent by client.
-			var leaseInfo leaseLib.LeaseInfo
-			dec := gob.NewDecoder(bytes.NewBuffer(value))
-			decodeErr := dec.Decode(&leaseInfo.LeaseMetaInfo)
-			if decodeErr != nil {
-				log.Error("Failed to decode the read request : ", decodeErr)
-				return
-			}
-			kuuid, _ := uuid.FromString(key)
-			lso.LeaseMap[kuuid] = &leaseInfo
-			leaseInfo.ListElement = &list.Element{}
-			leaseInfo.ListElement.Value = &leaseInfo
-			lso.listOperation(&leaseInfo, PUSH, false)
-			delete(rrres.ResultMap, key)
+	totalLeasesLoaded := 0
+
+	log.Info("Starting peerBootup: rebuilding LeaseMap from DB")
+
+	for {
+		log.Infof("RangeRead starting from key: %s", startKey)
+		rrargs := storageiface.RangeReadArgs{
+			Selector:   lso.LeaseColmFam,
+			Key:        startKey,        // continue from previous position
+			BufSize:    MAX_BUF_SIZE,
+			Consistent: false,
 		}
+
+		rrres, err := cbArgs.Store.RangeRead(rrargs)
+		if err != nil {
+    		if err.Error() == "Failed to lookup for key" {
+        		log.Info("No leases found in the DB.")
+        		break
+    		}
+    		log.Error("Failed to read from PumicDB: ", err)
+    		return
+		}
+
+		if rrres.ResultMap != nil {
+			log.Infof("RangeRead returned %d entries", len(rrres.ResultMap))
+			//Result of the read
+			for key, value := range rrres.ResultMap {
+				//Decode the request structure sent by client.
+				// var leaseInfo leaseLib.LeaseInfo
+				leaseInfo := new(leaseLib.LeaseInfo)
+				dec := gob.NewDecoder(bytes.NewBuffer(value))
+				decodeErr := dec.Decode(&leaseInfo.LeaseMetaInfo)
+				if decodeErr != nil {
+					log.Error("Failed to decode the read request : ", decodeErr)
+					continue
+				}
+				kuuid, err := uuid.FromString(key)
+				if err != nil {
+					log.Error("Invalid UUID: ", key)
+					continue
+				}
+				// Debug: print lease details
+				log.Infof("Loaded lease: Resource=%s Client=%s State=%d TTL=%d",
+					leaseInfo.LeaseMetaInfo.Resource,
+					leaseInfo.LeaseMetaInfo.Client,
+					leaseInfo.LeaseMetaInfo.LeaseState,
+					leaseInfo.LeaseMetaInfo.TTL,
+				)
+				// kuuid, _ := uuid.FromString(key)
+				lso.LeaseMap[kuuid] = leaseInfo
+
+				totalLeasesLoaded++
+
+				// ONLY insert valid leases into list
+				if leaseInfo.LeaseMetaInfo.LeaseState != leaseLib.EXPIRED {
+					lso.listOperation(leaseInfo, PUSH, false)
+				}
+				// leaseInfo.ListElement = &list.Element{}
+				// leaseInfo.ListElement.Value = leaseInfo
+				// lso.listOperation(leaseInfo, PUSH, false)
+				// delete(rrres.ResultMap, key)
+			}
+	    } else {
+			log.Warn("RangeRead returned nil ResultMap")
+		}
+
+		// Check if more entries exist
+		if rrres.LastKey == "" {
+			log.Info("Completed full DB scan")
+			break // fully scanned DB
+		}
+
+		// Continue from where buffer stopped
+		log.Infof("Continuing scan from LastKey: %s", rrres.LastKey)
+		startKey = rrres.LastKey
 	}
+	// Final summary
+	log.Infof("PeerBootup completed: Total leases loaded = %d", totalLeasesLoaded)
+	log.Infof("LeaseMap size = %d", len(lso.LeaseMap))
+	log.Infof("List size = %d", lso.listObj.Len())
 }
 
 func (lso *LeaseServerObject) sendGCReq(resourceUUIDs [MAX_SINGLE_GC_REQ]uuid.UUID, leaseCount int, leaderTerm int64) int {
