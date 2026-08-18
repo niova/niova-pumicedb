@@ -9,6 +9,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +37,18 @@ type HTTPServerHandler struct {
 	PortRange           []uint16
 	RecvdPort           *int
 	AppType             string
+	// Routes holds optional application-registered HTTP handlers keyed by
+	// exact URL path. A matching request is dispatched here instead of the
+	// built-in endpoints, letting apps expose e.g. a REST API alongside the
+	// legacy /func, /app and /lease paths. nil disables this.
+	Routes map[string]http.HandlerFunc
+	// RESTHandler, when set, handles every request whose path begins with
+	// "/api/" or "/users/", taking precedence over Routes and the built-in paths
+	// below. It lets apps register a method+pattern router (e.g. a Go ServeMux
+	// with "DELETE /api/vdev/{id}") for a REST API. The "/users/" prefix is
+	// delegated too so apps can place auth routes (e.g. "POST /users/login")
+	// outside the /api/ namespace. nil disables this.
+	RESTHandler http.Handler
 	//Non-exported
 	HTTPServer        http.Server
 	rncui             string
@@ -336,6 +349,21 @@ func (handler *HTTPServerHandler) funcHandler(writer http.ResponseWriter, reader
 
 // HTTP server handler called when request is received
 func (handler *HTTPServerHandler) ServeHTTP(writer http.ResponseWriter, reader *http.Request) {
+	// App-registered REST router handles everything under /api/ and /users/,
+	// taking precedence over the exact-path Routes map and built-in paths below.
+	if handler.RESTHandler != nil &&
+		(strings.HasPrefix(reader.URL.Path, "/api/") || strings.HasPrefix(reader.URL.Path, "/users/")) {
+		handler.RESTHandler.ServeHTTP(writer, reader)
+		return
+	}
+	// App-registered routes (e.g. REST API endpoints) take precedence over the
+	// built-in paths below.
+	if handler.Routes != nil {
+		if h, ok := handler.Routes[reader.URL.Path]; ok {
+			h(writer, reader)
+			return
+		}
+	}
 	if reader.URL.Path == "/config" {
 		handler.configHandler(writer, reader)
 	} else if (reader.URL.Path == "/stat") && (handler.StatsRequired) {

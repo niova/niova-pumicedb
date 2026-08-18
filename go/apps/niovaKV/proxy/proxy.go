@@ -13,6 +13,7 @@ import (
 	httpClient "github.com/00pauln00/niova-pumicedb/go/pkg/utils/httpclient"
 	httpServer "github.com/00pauln00/niova-pumicedb/go/pkg/utils/httpserver"
 	serfAgent "github.com/00pauln00/niova-pumicedb/go/pkg/utils/serfagent"
+	serviceDiscovery "github.com/00pauln00/niova-pumicedb/go/pkg/utils/servicediscovery"
 	"io/ioutil"
 	defaultLogger "log"
 	"net"
@@ -222,7 +223,9 @@ func (handler *proxyHandler) start_SerfAgent() error {
 	handler.serfAgentObj.ServicePortRangeS = handler.ServicePortRangeS
 	handler.serfAgentObj.ServicePortRangeE = handler.ServicePortRangeE
 	handler.serfAgentObj.RaftUUID = handler.raftUUID
-	handler.serfAgentObj.AppType = "PROXY"
+	// Not gossiped; serfagent only checks whether this equals "PMDB" to pick a
+	// port-allocation strategy.
+	handler.serfAgentObj.AppType = "NKV"
 
 	//Start serf agent
 	_, err := handler.serfAgentObj.SerfAgentStartup(true)
@@ -292,7 +295,7 @@ func (handler *proxyHandler) setSerfGossipData() {
 	tag["Hport"] = strconv.Itoa(int(handler.httpPort))
 	tag["Aport"] = strconv.Itoa(int(handler.serfAgentObj.Aport))
 	tag["Rport"] = strconv.Itoa(int(handler.serfAgentObj.RpcPort))
-	tag["Type"] = "PROXY"
+	tag["Type"] = serviceDiscovery.ServiceTypeNiovaKV
 	handler.serfAgentObj.SetNodeTags(tag)
 
 	//Dynamic tag : Leader UUID of PMDB cluster

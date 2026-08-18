@@ -248,6 +248,8 @@ func main() {
 		HTTPRetry: 10,
 		SerfRetry: 5,
 		RaftUUID:  clientObj.raftUUID,
+		// This client talks to NKV_proxy, not the control-plane app server.
+		ServiceTypeTag: serviceDiscovery.ServiceTypeNiovaKV,
 	}
 	stop := make(chan int)
 	go func() {
